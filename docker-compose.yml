@@ -1,0 +1,124 @@
+name: demo1-infra
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: demo1-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: demo1
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --max-connections=1000
+      - --innodb-flush-log-at-trx-commit=2
+      - --sync-binlog=0
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d:ro
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: demo1-redis
+    # maxmemory-policy=noeviction 很关键：库存/在途台账这类 key 一旦被 LRU 淘汰就会超卖
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 1gb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      # 宿主 6379 可能已被别的 Redis 占用，这里错开到 6380，避免影响已有服务
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.2
+    container_name: demo1-namesrv
+    command: sh mqnamesrv
+    environment:
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m -Xmn128m"
+    ports:
+      - "9876:9876"
+    volumes:
+      - rocketmq-namesrv-logs:/home/rocketmq/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/9876"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # broker 以 uid=3000(rocketmq) 运行，而新建的具名卷默认属于 root，会导致 store 初始化失败(退出码 255)
+  rocketmq-volume-init:
+    image: alpine:3
+    container_name: demo1-mq-volume-init
+    command: chown -R 3000:3000 /home/rocketmq/store /home/rocketmq/logs
+    volumes:
+      - rocketmq-broker-logs:/home/rocketmq/logs
+      - rocketmq-broker-store:/home/rocketmq/store
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.2
+    container_name: demo1-broker
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+      rocketmq-volume-init:
+        condition: service_completed_successfully
+    command: sh mqbroker -c /home/rocketmq/broker.conf
+    environment:
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m -Xmn128m -XX:MaxDirectMemorySize=256m"
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/broker.conf:ro
+      - rocketmq-broker-logs:/home/rocketmq/logs
+      - rocketmq-broker-store:/home/rocketmq/store
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/10911"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  # 预建 topic：否则消费者首次订阅时拿不到路由，要等生产者第一次发送触发自动建 topic 后才开始消费
+  # 注意 -b 用容器名而不是 brokerIP1(127.0.0.1)：brokerIP1 是给宿主机上的应用用的
+  rocketmq-topic-init:
+    image: apache/rocketmq:5.3.2
+    container_name: demo1-mq-topic-init
+    depends_on:
+      rocketmq-broker:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sh mqadmin updateTopic -n rocketmq-namesrv:9876 -b rocketmq-broker:10911 -t topic-seckill-order -r 8 -w 8 -p 6 &&
+        sh mqadmin updateTopic -n rocketmq-namesrv:9876 -b rocketmq-broker:10911 -t topic-like-event -r 8 -w 8 -p 6
+
+volumes:
+  mysql-data:
+  redis-data:
+  rocketmq-namesrv-logs:
+  rocketmq-broker-logs:
+  rocketmq-broker-store:

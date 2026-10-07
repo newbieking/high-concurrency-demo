@@ -1,0 +1,82 @@
+server:
+  port: 8080
+  tomcat:
+    threads:
+      max: 500
+      min-spare: 50
+    accept-count: 2000
+    max-connections: 20000
+
+spring:
+  application:
+    name: demo1
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/demo1?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true&useServerPrepStmts=true&cachePrepStmts=true
+    username: root
+    password: root
+    hikari:
+      pool-name: demo1-pool
+      maximum-pool-size: 64
+      minimum-idle: 16
+      connection-timeout: 2000
+      validation-timeout: 1000
+      max-lifetime: 1800000
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6380
+      timeout: 2000ms
+      connect-timeout: 2000ms
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 64
+          max-idle: 32
+          min-idle: 8
+          max-wait: 1000ms
+        shutdown-timeout: 100ms
+
+demo:
+  mq:
+    namesrv-addr: 127.0.0.1:9876
+    producer-group: demo1-producer
+    send-timeout-ms: 3000
+    retry-times-when-send-failed: 2
+    consumer-threads: 32
+  seckill:
+    topic: topic-seckill-order
+    consumer-group: cg-seckill-order
+    stream-key: sk:stream
+    dispatch-threads: 2
+    dispatch-batch-size: 256
+    dispatch-poll-ms: 20
+    max-in-flight: 20000
+    in-flight-timeout-ms: 20000
+    max-redeliver: 5
+    request-ttl-seconds: 7200
+    reconcile-interval-ms: 5000
+  like:
+    topic: topic-like-event
+    consumer-group: cg-like-event
+    stream-key: lk:stream
+    rank-key: lk:rank
+    dispatch-threads: 2
+    dispatch-batch-size: 512
+    dispatch-poll-ms: 20
+    reconcile-interval-ms: 10000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.example.demo: INFO
+    org.apache.rocketmq: WARN
+    io.lettuce: WARN
